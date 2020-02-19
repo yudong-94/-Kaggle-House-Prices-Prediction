@@ -1,0 +1,655 @@
+---
+title: "House Price Prediction"
+output: html_notebook
+---
+
+## Intialization
+
+First, let's load neccessary packages and import datasets.  
+
+```{r load, include=FALSE}
+library(tidyverse)
+```
+
+```{r import data, echo=TRUE}
+train = read.csv('train.csv')
+test = read.csv('test.csv')
+head(train)
+colnames(train)
+```
+
+
+## EDA
+
+Let's first look at the distribution of SalePrice. Not surprisingly, it's right-skewed, and apply log() on it will make it closer to normal distribution.  
+
+```{r price}
+ggplot(train, aes(x = SalePrice)) +
+    geom_histogram(bins = 30) 
+
+
+ggplot(train, aes(x = log(SalePrice))) +
+    geom_histogram(bins = 30) 
+```
+
+Next, look at some categorical variables to see whether we see a obvious difference in SalePrice for each category.  
+
+1. MSZoning identifies the general zoning classification of the sale.  
+       A	Agriculture  
+       C	Commercial  
+       FV	Floating Village Residential  
+       I	Industrial  
+       RH	Residential High Density  
+       RL	Residential Low Density  
+       RP	Residential Low Density Park  
+       RM	Residential Medium Density  
+
+We do see that certain type of property tends to have a higher price (FV & RL), but please notice that there are much fewer properties with type other than RL and RM.    
+```{r zone}
+zone_summary = train %>%
+    group_by(MSZoning) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+print(zone_summary)
+
+ggplot(data=zone_summary, aes(x = MSZoning, y = avg_price)) +
+    geom_bar(stat = 'identity') +
+    geom_text(aes(label = round(avg_price,0)), vjust = 0)
+```
+
+Street is the type of road access to property. 'Grvl' means Gravel and 'Pave' means Paved. However, there are only 6 properties with Gravel road access, so it does not tell much... 
+
+```{r street}
+train %>%
+    group_by(Street) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+```
+
+LotShape is the general shape of property.  
+Reg: Regular, IR1: Slightly irregular, IR2: Moderately Irregular,  IR3: Irregular  
+Again, there is a not very balanced category -- most properties have the shape L1 or R.  
+
+```{r LotShape}
+
+shape_summary = train %>%
+    group_by(LotShape) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+print(shape_summary)
+
+ggplot(data = shape_summary, aes(x = LotShape, y = avg_price)) +
+    geom_bar(stat = 'identity') +
+    geom_text(aes(label = round(avg_price,0)), vjust = 0)
+```
+
+Utilities represent the type of utilities available. This one is even unbalanced, with only one property of the type 'NoSeWa' (Electricity and Gas Only). We should consider dropping it for modeling.  
+
+```{r Utilities}
+
+train %>%
+    group_by(Utilities) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+```
+
+Neighborhood is typically pretty important for housing price. This dataset also tells the same story.    
+
+```{r Neighborhood}
+
+ggplot(train, aes(x = Neighborhood, y = SalePrice)) +
+    geom_boxplot()
+
+```
+
+Condition1 and Condition2 columns provides proximity to various conditions, and again in most cases, the value is 'Norm'.  
+
+```{r Conditions}
+
+train %>%
+    group_by(Condition1) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+train %>%
+    group_by(Condition2) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+```
+
+Looking at the building type, most properties are either 1Fam (Single-family Detached) or TwnhsE (Townhouse End Unit), and their average prices are higher than other types.  
+
+```{r BldgType}
+
+train %>%
+    group_by(BldgType) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+```
+
+HouseStype is the style of dwelling. Seems like properties with more finished stories tend to have higher prices.  
+
+```{r HouseStyle}
+train %>%
+    group_by(HouseStyle) %>%
+    summarise(property_count = n(),
+              avg_price = mean(SalePrice))
+
+ggplot(train, aes(x = HouseStyle, y = SalePrice)) +
+    geom_boxplot() +
+    scale_x_discrete(name ="House Style",
+                    limits = c("1Story", "1.5Unf", "1.5Fin", "2Story", "2.5Unf",
+                               "2.5Fin", "SFoyer", "SLvl"))
+
+```
+
+Now let's switch to some numeric variables... 
+
+GrLivArea is the Above grade (ground) living area square feet. It has a pretty strong positive correlation with sale price as everyone would assume... 
+
+```{r GriLivArea}
+ggplot(train, aes(x = log(GrLivArea), y = log(SalePrice))) +
+    geom_point()
+
+cor(log(train$GrLivArea), log(train$SalePrice))
+```
+
+Meanwhile, LotArea is the lot size. I was expecting it to be somewhat positively correlated with sale price as well, but seems like the correlation is pretty weak.  
+
+```{r area}
+ggplot(train, aes(x = log(LotArea), y = log(SalePrice))) +
+    geom_point()
+
+cor(log(train$LotArea), log(train$SalePrice))
+```
+
+Similar thing to LotFrontage, which is the linear feet of street connected to property.
+
+```{r LotFrontage}
+
+ggplot(train, aes(x = log(LotFrontage), y = log(SalePrice))) +
+    geom_point()
+
+cor(log(train$LotFrontage), log(train$SalePrice), use = 'complete.obs')
+```
+
+Another thing I am interested in is -- is the average sale price increasing over year? Well the answer is no in this dataset (but maybe something due to the recession around 2009). But one thing about year that is always true is -- newer built properties tend to be sold at higher prices.  
+
+```{r year}
+
+train %>%
+    ggplot(aes(x = factor(YrSold), y = SalePrice)) +
+    geom_boxplot() +
+    scale_x_discrete(name ="Year Sold")
+
+
+train %>%
+    mutate(YearToSold = YrSold - YearBuilt) %>%
+    ggplot(aes(x = factor(YearToSold), y = SalePrice)) +
+    geom_boxplot() +
+    scale_x_discrete(name ="Year From Build to Sold")
+
+
+```
+
+Last, let's look at two columns with subjective ratings: OverallQual (Rates the overall material and finish of the house) and OverallCond(Rates the overall condition of the house). OverallQual turned out to be have a "perfect" positive correlation with Sale Price... While OverallCond also follows a weaker but still positive correlation pattern.  
+
+```{r overall rating}
+
+train %>%
+    ggplot(aes(x = factor(OverallQual), y = SalePrice)) +
+    geom_boxplot() +
+    scale_x_discrete(name ="Overall Quality Rating")
+
+
+train %>%
+    ggplot(aes(x = factor(OverallCond), y = SalePrice)) +
+    geom_boxplot() +
+    scale_x_discrete(name ="Overall Condition Rating")
+
+
+```
+
+
+## Data Preparation
+
+To prepare the dataset easily and transform columns at once, let's combine the tranin and test data for now with a new column called data_flg to differentiate them.  
+
+```{r combine dataset}
+
+test$SalePrice = 0
+
+train$data_flg = 'train'
+test$data_flg = 'test'
+
+all_data = rbind(train, test)
+
+all_data %>%
+    group_by(data_flg) %>%
+    summarise(count = n())
+```
+
+After readind the column description, there are some columns that we need to fix the data types -- MSSubClass should be categorical, but are now store as integer with each idnex indicating one category; there are also a lot of ordinal categorical variables about quality and condition that we can transform into numeric variables to keep the ordinal info.  
+
+```{r data type fix}
+
+# building class should be a categorical variable
+all_data$MSSubClass = as.factor(all_data$MSSubClass)
+
+# ordinal categories can be converted into numeric varaibles (with the same order)
+shape_lvl = c('Reg', 'IR1', 'IR2', 'IR3')
+all_data$LotShape = factor(all_data$LotShape, shape_lvl)
+all_data$LotShape = as.numeric(all_data$LotShape)
+
+qual_lvl = c('Po', 'Fa', 'TA', 'Gd', 'Ex')
+all_data$ExterQual = factor(all_data$ExterQual, qual_lvl)
+all_data$ExterQual = as.numeric(all_data$ExterQual)
+
+all_data$ExterCond = factor(all_data$ExterCond, qual_lvl)
+all_data$ExterCond = as.numeric(all_data$ExterCond)
+
+all_data$HeatingQC = factor(all_data$HeatingQC, qual_lvl)
+all_data$HeatingQC = as.numeric(all_data$HeatingQC)
+
+all_data$KitchenQual = factor(all_data$KitchenQual, qual_lvl)
+all_data$KitchenQual = as.numeric(all_data$KitchenQual)
+
+
+qual_lvl = c('NA', 'Po', 'Fa', 'TA', 'Gd', 'Ex')
+all_data$BsmtQual = factor(all_data$BsmtQual, qual_lvl)
+all_data$BsmtQual = as.numeric(all_data$BsmtQual)
+
+all_data$BsmtCond = factor(all_data$BsmtCond, qual_lvl)
+all_data$BsmtCond = as.numeric(all_data$BsmtCond)
+
+all_data$FireplaceQu = factor(all_data$FireplaceQu, qual_lvl)
+all_data$FireplaceQu = as.numeric(all_data$FireplaceQu)
+
+all_data$GarageQual = factor(all_data$GarageQual, qual_lvl)
+all_data$GarageQual = as.numeric(all_data$GarageQual)
+
+all_data$GarageCond = factor(all_data$GarageCond, qual_lvl)
+all_data$GarageCond = as.numeric(all_data$GarageCond)
+
+all_data$PoolQC = factor(all_data$PoolQC, qual_lvl)
+all_data$PoolQC = as.numeric(all_data$PoolQC)
+
+
+expo_lvl = c('NA', 'No', 'Mn', 'Av', 'Gd')
+all_data$BsmtExposure = factor(all_data$BsmtExposure, expo_lvl)
+all_data$BsmtExposure = as.numeric(all_data$BsmtExposure)
+
+
+fintype_lvl = c('NA', 'Unf', 'LwQ', 'Rec', 'BLQ', 'ALQ', 'GLQ')
+all_data$BsmtFinType1 = factor(all_data$BsmtFinType1, fintype_lvl)
+all_data$BsmtFinType1 = as.numeric(all_data$BsmtFinType1)
+
+all_data$BsmtFinType2 = factor(all_data$BsmtFinType2, fintype_lvl)
+all_data$BsmtFinType2 = as.numeric(all_data$BsmtFinType2)
+
+grg_lvl = c('NA', 'Unf', 'RFn', 'Fin')
+all_data$GarageFinish = factor(all_data$GarageFinish, grg_lvl)
+all_data$GarageFinish = as.numeric(all_data$GarageFinish)
+
+# Y/N
+all_data$CentralAir = as.numeric(all_data$CentralAir)
+
+
+rm(expo_lvl, fintype_lvl, grg_lvl, qual_lvl, shape_lvl)
+
+```
+
+Now let's take another look of our dataset.  
+
+```{r summary}
+summary(all_data)
+```
+
+Let's also build some new features based on common sense which could potentially benefit our model performance.  
+
+```{r new features}
+# year related
+all_data$RemodFlag = ifelse(all_data$YearBuilt == all_data$YearRemodAdd, 0, 1)
+all_data$YearSinceRemod = all_data$YrSold - all_data$YearRemodAdd
+all_data$YearToSold = all_data$YrSold - all_data$YearBuilt
+
+# area comparison
+all_data$MasVnrToLiv = all_data$MasVnrArea / all_data$GrLivArea
+all_data$BsmtToLiv = all_data$TotalBsmtSF / all_data$GrLivArea
+all_data$WoodDeckToLiv = all_data$WoodDeckSF / all_data$GrLivArea
+all_data$OpenPorchToLiv = all_data$OpenPorchSF / all_data$GrLivArea
+all_data$EnclosedPorchToLiv = all_data$EnclosedPorch / all_data$GrLivArea
+all_data$X3SsnPorchToLiv = all_data$X3SsnPorch / all_data$GrLivArea
+all_data$ScreenPorchToLiv = all_data$ScreenPorch / all_data$GrLivArea
+all_data$PoolToLiv = all_data$PoolArea / all_data$GrLivArea
+all_data$GarageToLiv = all_data$GarageArea / all_data$GrLivArea
+```
+
+As we can see above in the table summary, there are lot's of NAs we need to fill in. In this case, NAs in most of the categorical variables means 'not applicable', so let's add it as a new category 'Unknown'. Similarly, for the NAs in the numeric variables, most of the cases it means 'no basement/garage/...' thus 'not applicable', so for simpicity let's just impute it with 0.   
+
+```{r fillna}
+
+# columns with NAs:
+colnames(all_data)[colSums(is.na(all_data)) > 0]
+
+# categorical (fill with new category 'Unknown'):
+all_data$MSZoning = as.factor(ifelse(is.na(all_data$MSZoning), 
+                           'Unknown', 
+                           as.character(all_data$MSZoning)))
+
+all_data$Alley = as.factor(ifelse(is.na(all_data$Alley), 
+                           'Unknown', 
+                           as.character(all_data$Alley)))
+
+all_data$Utilities = as.factor(ifelse(is.na(all_data$Utilities), 
+                           'Unknown', 
+                           as.character(all_data$Utilities)))
+
+all_data$Exterior1st = as.factor(ifelse(is.na(all_data$Exterior1st), 
+                           'Unknown', 
+                           as.character(all_data$Exterior1st)))
+
+all_data$Exterior2nd = as.factor(ifelse(is.na(all_data$Exterior2nd), 
+                           'Unknown', 
+                           as.character(all_data$Exterior2nd)))
+
+all_data$MasVnrType = as.factor(ifelse(is.na(all_data$MasVnrType), 
+                           'Unknown', 
+                           as.character(all_data$MasVnrType)))
+
+all_data$Electrical = as.factor(ifelse(is.na(all_data$Electrical), 
+                           'Unknown', 
+                           as.character(all_data$Electrical)))
+
+all_data$Functional = as.factor(ifelse(is.na(all_data$Functional), 
+                           'Unknown', 
+                           as.character(all_data$Functional)))
+
+all_data$GarageType = as.factor(ifelse(is.na(all_data$GarageType), 
+                           'Unknown', 
+                           as.character(all_data$GarageType)))
+
+all_data$Fence = as.factor(ifelse(is.na(all_data$Fence), 
+                           'Unknown', 
+                           as.character(all_data$Fence)))
+
+all_data$MiscFeature = as.factor(ifelse(is.na(all_data$MiscFeature), 
+                           'Unknown', 
+                           as.character(all_data$MiscFeature)))
+
+all_data$SaleType = as.factor(ifelse(is.na(all_data$SaleType), 
+                           'Unknown', 
+                           as.character(all_data$SaleType)))
+
+# numeric variables (case by case)
+
+all_data$LotFrontage = ifelse(is.na(all_data$LotFrontage), 
+                           0, 
+                           all_data$LotFrontage)
+
+all_data$MasVnrArea = ifelse(is.na(all_data$MasVnrArea), 
+                           0, 
+                           all_data$MasVnrArea)
+
+all_data$BsmtQual = ifelse(is.na(all_data$BsmtQual), 
+                           0, 
+                           all_data$BsmtQual)
+
+all_data$BsmtCond = ifelse(is.na(all_data$BsmtCond), 
+                           0, 
+                           all_data$BsmtCond)
+
+all_data$BsmtExposure = ifelse(is.na(all_data$BsmtExposure), 
+                           0, 
+                           all_data$BsmtExposure)
+
+all_data$BsmtFinType1 = ifelse(is.na(all_data$BsmtFinType1), 
+                           0, 
+                           all_data$BsmtFinType1)
+
+all_data$BsmtFinSF1 = ifelse(is.na(all_data$BsmtFinSF1), 
+                           0, 
+                           all_data$BsmtFinSF1)
+
+all_data$BsmtFinType2 = ifelse(is.na(all_data$BsmtFinType2), 
+                           0, 
+                           all_data$BsmtFinType2)
+
+all_data$BsmtFinSF2 = ifelse(is.na(all_data$BsmtFinSF2), 
+                           0, 
+                           all_data$BsmtFinSF2)
+
+all_data$BsmtUnfSF = ifelse(is.na(all_data$BsmtUnfSF), 
+                           0, 
+                           all_data$BsmtUnfSF)
+
+all_data$TotalBsmtSF = ifelse(is.na(all_data$TotalBsmtSF), 
+                           0, 
+                           all_data$TotalBsmtSF)
+
+all_data$BsmtFullBath = ifelse(is.na(all_data$BsmtFullBath), 
+                           0, 
+                           all_data$BsmtFullBath)
+
+all_data$BsmtHalfBath = ifelse(is.na(all_data$BsmtHalfBath), 
+                           0, 
+                           all_data$BsmtHalfBath)
+
+all_data$KitchenQual = ifelse(is.na(all_data$KitchenQual), 
+                           0, 
+                           all_data$KitchenQual)
+
+all_data$FireplaceQu = ifelse(is.na(all_data$FireplaceQu), 
+                           0, 
+                           all_data$FireplaceQu)
+
+all_data$GarageYrBlt = ifelse(is.na(all_data$GarageYrBlt), 
+                           0, 
+                           all_data$GarageYrBlt)
+
+all_data$GarageFinish = ifelse(is.na(all_data$GarageFinish), 
+                           0, 
+                           all_data$GarageFinish)
+
+all_data$GarageCars = ifelse(is.na(all_data$GarageCars), 
+                           0, 
+                           all_data$GarageCars)
+
+all_data$GarageArea = ifelse(is.na(all_data$GarageArea), 
+                           0, 
+                           all_data$GarageArea)
+
+all_data$GarageQual = ifelse(is.na(all_data$GarageQual), 
+                           0, 
+                           all_data$GarageQual)
+
+all_data$GarageCond = ifelse(is.na(all_data$GarageCond), 
+                           0, 
+                           all_data$GarageCond)
+
+all_data$PoolQC = ifelse(is.na(all_data$PoolQC), 
+                           0, 
+                           all_data$PoolQC)
+
+all_data$MasVnrToLiv = ifelse(is.na(all_data$MasVnrToLiv), 
+                           0, 
+                           all_data$MasVnrToLiv)
+
+all_data$BsmtToLiv = ifelse(is.na(all_data$BsmtToLiv), 
+                           0, 
+                           all_data$BsmtToLiv)
+
+all_data$GarageToLiv = ifelse(is.na(all_data$GarageToLiv), 
+                           0, 
+                           all_data$GarageToLiv)
+
+
+```
+
+
+
+## Modeling
+
+Now that we have prepared the data, let's build a simple regressor with xgboost package. Here I am simply using a 80/20 split of the training set to do model validation. (Ideally you should do a k-fold cross-validation)  
+
+```{r modeling prep}
+library(xgboost)
+
+all_train = all_data %>% filter(data_flg == 'train') %>% select(-data_flg)
+all_test = all_data %>% filter(data_flg == 'test') %>% select(-data_flg, -SalePrice)
+
+set.seed(42)
+index_sample = sample(nrow(all_train),size = nrow(all_train)*0.2)
+
+all_train$SalePriceLog = log(all_train$SalePrice)
+
+train = all_train[-index_sample,]
+test = all_train[index_sample,]
+
+```
+
+
+```{r Target Encoding}
+
+# for categorical variables, create mapping table (based on train set)
+
+# get all categorical varaibles
+cat_varaibles = colnames(all_train)[sapply(all_train, is.factor)]
+
+# for each categorical variable, map the category value to average price in the training set
+overall_avg_price = mean(train$SalePrice)
+smoothing_parameter = 1
+    
+for (cat_var in cat_varaibles) {
+    
+    col_name_avg = paste0(cat_var, '_avg_price')
+    col_name_count = paste0(cat_var, '_count')
+    col_name = paste0(cat_var, '_avg')
+    
+    df_map = train %>%
+                group_by(!!as.name(cat_var)) %>%
+                summarise(!!as.name(col_name_avg) := mean(SalePrice),
+                          !!as.name(col_name_count) := n(),) %>%
+                mutate(!!as.name(col_name) := 
+                           (!!as.name(col_name_avg) * !!as.name(col_name_count) +
+                                smoothing_parameter * overall_avg_price) / 
+                           (smoothing_parameter + !!as.name(col_name_count))) %>%
+                select(-!!as.name(col_name_avg), -!!as.name(col_name_count))
+                      
+    
+    all_train = merge(all_train, df_map, by = cat_var, all.x = TRUE)
+    
+    all_train = select(all_train, -!!as.name(cat_var))
+}
+
+summary(all_train)
+
+```
+
+
+```{r train and validation}
+set.seed(42)
+
+train = all_train[-index_sample,]
+test = all_train[index_sample,]
+
+train_x = as.matrix(select(train, -SalePriceLog, -SalePrice, -Id))
+train_y = train$SalePriceLog
+
+test_x = as.matrix(select(test, -SalePriceLog, -Id))
+test_y = test$SalePriceLog
+
+dtrain = xgb.DMatrix(data = train_x, label = train_y)
+dtest = xgb.DMatrix(data = test_x, label = test_y)
+
+watchlist <- list(train=dtrain, test=dtest)
+
+xg_model <- xgb.train(
+            data=dtrain, 
+            max.depth=5, 
+            #subsample = 0.9,
+            #min_child_weight = 5,
+            eta=0.05, 
+            nrounds=500, 
+            watchlist=watchlist, 
+            eval.metric = "rmse",
+            objective = "reg:squarederror")
+
+which.min(xg_model$evaluation_log$test_rmse)
+
+```
+
+```{r importance}
+
+importance <- xgb.importance(feature_names = colnames(train_x), model = xg_model)
+
+importance %>% arrange(-Gain)
+
+```
+
+
+
+```{r prediction}
+all_train = all_data %>% filter(data_flg == 'train') %>% select(-data_flg)
+all_test = all_data %>% filter(data_flg == 'test') %>% select(-data_flg, -SalePrice)
+
+# target encoding on the whole training set now
+overall_avg_price = mean(all_train$SalePrice)
+smoothing_parameter = 1
+    
+for (cat_var in cat_varaibles) {
+    
+    col_name_avg = paste0(cat_var, '_avg_price')
+    col_name_count = paste0(cat_var, '_count')
+    col_name = paste0(cat_var, '_avg')
+    
+    df_map = all_train %>%
+                group_by(!!as.name(cat_var)) %>%
+                summarise(!!as.name(col_name_avg) := mean(SalePrice),
+                          !!as.name(col_name_count) := n(),) %>%
+                mutate(!!as.name(col_name) := 
+                           (!!as.name(col_name_avg) * !!as.name(col_name_count) +
+                                smoothing_parameter * overall_avg_price) / 
+                           (smoothing_parameter + !!as.name(col_name_count))) %>%
+                select(-!!as.name(col_name_avg), -!!as.name(col_name_count))
+                      
+    
+    all_data = merge(all_data, df_map, by = cat_var, all.x = TRUE)
+    
+    all_data = select(all_data, -!!as.name(cat_var))
+}
+
+all_train = all_data %>% filter(data_flg == 'train') %>% select(-data_flg)
+all_test = all_data %>% filter(data_flg == 'test') %>% select(-data_flg, -SalePrice)
+
+all_train$SalePriceLog = log(all_train$SalePrice)
+
+train_x = as.matrix(select(all_train, -SalePriceLog, -SalePrice, -Id))
+train_y = all_train$SalePriceLog
+
+dtrain = xgb.DMatrix(data = train_x, label = train_y)
+
+xg_model <- xgb.train(
+            data=dtrain, 
+            max.depth=5, 
+            eta=0.05, 
+            nrounds=350,
+            eval.metric = "rmse",
+            objective = "reg:squarederror")
+
+test_x = as.matrix(select(all_test, -Id))
+dtest = xgb.DMatrix(data = test_x)
+
+test_pred <- predict(xg_model, dtest)
+
+submission = arrange(data.frame(Id = all_test$Id, SalePrice = exp(test_pred)), Id)
+
+write.csv(submission, 'submission_R.csv', row.names = FALSE)
+
+```
+
